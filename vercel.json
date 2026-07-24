@@ -1,0 +1,9 @@
+{
+  "crons": [
+    { "path": "/api/watch?trigger=scheduled", "schedule": "0 6 1 * *" }
+  ],
+  "functions": {
+    "api/watch.js": { "maxDuration": 300 },
+    "api/documents.js": { "maxDuration": 300 }
+  }
+}

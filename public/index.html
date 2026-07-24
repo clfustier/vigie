@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vigie — Veille réglementaire vin</title>
+<style>
+  :root { --bg:#f7f5f2; --card:#fff; --ink:#2b2620; --accent:#7a1f2b; --line:#e5e0d8; --ok:#2e7d32; --warn:#e65100; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--ink); }
+  header { background:var(--accent); color:#fff; padding:14px 24px; display:flex; align-items:center; gap:16px; }
+  header h1 { font-size:19px; margin:0; font-weight:600; }
+  nav { display:flex; gap:4px; margin-left:24px; }
+  nav button { background:transparent; border:0; color:#f3d9dc; padding:8px 14px; cursor:pointer; font-size:14px; border-radius:6px 6px 0 0; }
+  nav button.active { background:var(--bg); color:var(--accent); font-weight:600; }
+  main { padding:20px 24px; max-width:1240px; margin:auto; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px; margin-bottom:18px; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; align-items:end; }
+  label { font-size:12px; color:#6b6257; display:block; margin-bottom:3px; }
+  select,input[type=text],input[type=date],input[type=password] { padding:8px 10px; border:1px solid var(--line); border-radius:6px; font-size:14px; background:#fff; min-width:180px; }
+  button.btn { background:var(--accent); color:#fff; border:0; padding:9px 16px; border-radius:6px; cursor:pointer; font-size:14px; }
+  button.btn.sec { background:#fff; color:var(--accent); border:1px solid var(--accent); }
+  table { border-collapse:collapse; width:100%; font-size:13.5px; }
+  th,td { border-bottom:1px solid var(--line); padding:8px 10px; text-align:left; vertical-align:top; }
+  th { background:#faf8f5; font-weight:600; position:sticky; top:0; }
+  tr.section-head td { background:#f0ebe3; font-weight:700; color:var(--accent); }
+  .src a { color:#8a6d3b; font-size:12px; text-decoration:none; }
+  .badge { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; background:#eee; }
+  .badge.validated { background:#e5f2e6; color:var(--ok); }
+  .badge.ai { background:#fff3e0; color:var(--warn); }
+  .diffcell.diff { background:#fdecea; }
+  #dropzone { border:2px dashed var(--line); border-radius:10px; padding:34px; text-align:center; color:#8b8175; cursor:pointer; }
+  #dropzone.drag { border-color:var(--accent); background:#fdf7f8; }
+  .muted { color:#8b8175; font-size:12.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🍇 Vigie</h1>
+  <nav>
+    <button data-tab="pays" class="active">Veille pays</button>
+    <button data-tab="client">Veille client</button>
+    <button data-tab="couple">Couple pays × client</button>
+    <button data-tab="compare">Comparateur</button>
+    <button data-tab="validation">Validation qualité</button>
+  </nav>
+  <span style="flex:1"></span>
+  <input type="password" id="adminKey" placeholder="Clé admin" style="min-width:120px">
+</header>
+<main>
+
+<!-- ============ ONGLET 1 : VEILLE PAYS ============ -->
+<section id="tab-pays">
+  <div class="card row">
+    <div><label>Pays / juridiction</label><select id="paysSel"></select></div>
+    <button class="btn" onclick="loadPays()">Afficher</button>
+    <span style="flex:1"></span>
+    <button class="btn sec" onclick="runWatch()">⟳ Lancer la veille maintenant</button>
+    <span class="muted">Mise à jour auto : le 1er de chaque mois</span>
+  </div>
+  <div class="card"><div id="paysTable" class="muted">Choisir un pays.</div></div>
+</section>
+
+<!-- ============ ONGLET 2 : VEILLE CLIENT ============ -->
+<section id="tab-client" hidden>
+  <div class="card">
+    <div class="row" style="margin-bottom:12px">
+      <div><label>Client</label><select id="clientSel"></select></div>
+      <div><label>Remplace un document existant ? (V2 → archive V1)</label><select id="replacesSel"><option value="">Non — nouveau document</option></select></div>
+      <div><label>Date de mise en application (sinon détectée par IA)</label><input type="date" id="effDate"></div>
+    </div>
+    <div id="dropzone">Déposer ici un document (PDF, Excel, Word, CSV…) ou cliquer pour choisir<input type="file" id="fileInput" hidden></div>
+    <div id="uploadStatus" class="muted" style="margin-top:8px"></div>
+  </div>
+  <div class="card">
+    <b>Bibliothèque de documents</b>
+    <div class="row" style="margin:10px 0">
+      <div><label>Type</label><select id="libType"><option value="">Tous</option><option>cdc</option><option>charte_qualite</option><option>plan_controle</option><option>spec_packaging</option><option>autre</option></select></div>
+      <div><label>Statut</label><select id="libStatus"><option value="">Tous</option><option>active</option><option>pending_validation</option><option>archived</option></select></div>
+      <button class="btn sec" onclick="loadLibrary()">Filtrer</button>
+    </div>
+    <div id="libTable"></div>
+  </div>
+  <div class="card"><b>Spécifications du client</b><div id="clientTable" class="muted" style="margin-top:8px">Choisir un client puis filtrer.</div>
+    <button class="btn sec" style="margin-top:10px" onclick="loadClientTable()">Afficher la table de spécifications</button></div>
+</section>
+
+<!-- ============ OUTIL 1 : COUPLE ============ -->
+<section id="tab-couple" hidden>
+  <div class="card row">
+    <div><label>Pays</label><select id="cpPays"></select></div>
+    <div><label>Client</label><select id="cpClient"></select></div>
+    <button class="btn" onclick="loadCouple()">Tout ce qu'il faut respecter</button>
+  </div>
+  <div class="card"><div id="coupleTable" class="muted">Exigences pays + exigences client fusionnées, triées par section.</div></div>
+</section>
+
+<!-- ============ OUTIL 2 : COMPARATEUR ============ -->
+<section id="tab-compare" hidden>
+  <div class="card">
+    <div class="muted" style="margin-bottom:8px">2 ou 3 cibles. Une cible = un pays, un client, ou un couple pays+client.</div>
+    <div class="row" id="cmpTargets"></div>
+    <div style="margin-top:10px">
+      <button class="btn sec" onclick="addTarget()">+ cible</button>
+      <button class="btn" onclick="runCompare()">Comparer</button>
+    </div>
+  </div>
+  <div class="card"><div id="cmpTable"></div></div>
+</section>
+
+<!-- ============ VALIDATION QUALITÉ ============ -->
+<section id="tab-validation" hidden>
+  <div class="card">
+    <b>Exigences en attente de validation</b>
+    <div class="muted">Workflow : scan IA → proposition → validation → consultable. Rien n'est actif sans validation.</div>
+    <div style="margin:10px 0"><input type="text" id="validator" placeholder="Votre nom (validateur)">
+      <button class="btn" onclick="decide('approve')">Valider la sélection</button>
+      <button class="btn sec" onclick="decide('reject')">Rejeter la sélection</button></div>
+    <div id="pendingTable"></div>
+  </div>
+</section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const api = (path, opts={}) => fetch(path, { ...opts, headers: { 'content-type':'application/json', 'x-admin-key': $('#adminKey').value, ...(opts.headers||{}) } }).then(r => r.json());
+
+// --- Navigation ---
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('active', x===b));
+  document.querySelectorAll('main section').forEach(s => s.hidden = s.id !== 'tab-'+b.dataset.tab);
+  if (b.dataset.tab === 'validation') loadPending();
+});
+
+// --- Rendu commun : table de spécifications par section (format unique) ---
+function renderTable(rows, el) {
+  if (!rows?.length) { el.innerHTML = '<span class="muted">Aucune exigence active.</span>'; return; }
+  let html = '<table><tr><th>Paramètre</th><th>Exigence</th><th>Limite</th><th>S\'applique à</th><th>Date d\'appl.</th><th>Source</th><th></th></tr>';
+  let cur = null;
+  for (const r of rows) {
+    if (r.section !== cur) { cur = r.section; html += `<tr class="section-head"><td colspan="7">${cur}</td></tr>`; }
+    const lim = r.limit_value != null ? `${r.operator||''} ${r.limit_value} ${r.unit||''}` : (r.operator||'—');
+    html += `<tr><td><b>${r.parameter}</b></td><td>${r.requirement}</td><td>${lim}</td><td>${r.applies_to||'—'}</td>
+      <td>${r.effective_date||'—'}</td>
+      <td class="src">${r.source_url?`<a href="${r.source_url}" target="_blank">${r.source_name||'source'} ↗</a>`:(r.source_name||'—')}<br><span class="muted">${r.source_ref||''}</span></td>
+      <td><span class="badge ${r.confidence==='validated'?'validated':'ai'}">${r.confidence==='validated'?'validé':'IA'}</span></td></tr>`;
+  }
+  el.innerHTML = html + '</table>';
+}
+
+// --- Veille pays ---
+async function initSelectors() {
+  const [jur, clients] = await Promise.all([api('/api/query?action=jurisdictions'), api('/api/query?action=clients')]);
+  const jopt = jur.map(j => `<option value="${j.code}">${j.name}</option>`).join('');
+  const copt = clients.map(c => `<option value="${c.id}">${c.parent_id?'&nbsp;&nbsp;↳ ':''}${c.name}</option>`).join('');
+  ['#paysSel','#cpPays'].forEach(s => $(s).innerHTML = jopt);
+  ['#clientSel','#cpClient'].forEach(s => $(s).innerHTML = copt);
+  window._jopt = jopt; window._copt = copt;
+  addTarget(); addTarget();
+}
+async function loadPays() { renderTable(await api(`/api/query?action=table&jurisdiction=${$('#paysSel').value}`), $('#paysTable')); }
+async function runWatch() {
+  $('#paysTable').innerHTML = 'Veille en cours… (peut prendre quelques minutes)';
+  const r = await api(`/api/watch?trigger=manual&jurisdiction=${$('#paysSel').value}`, { method:'POST' });
+  $('#paysTable').innerHTML = `<b>Run terminé.</b> Sources vérifiées: ${r.sources_checked}, modifiées: ${r.changed}, exigences extraites: ${r.extracted}. ` +
+    (r.errors?.length ? `<span style="color:var(--warn)">Erreurs: ${JSON.stringify(r.errors)}</span>` : '') +
+    ' → passer par l\'onglet Validation qualité.';
+}
+
+// --- Veille client : upload ---
+const dz = $('#dropzone');
+dz.onclick = () => $('#fileInput').click();
+dz.ondragover = e => { e.preventDefault(); dz.classList.add('drag'); };
+dz.ondragleave = () => dz.classList.remove('drag');
+dz.ondrop = e => { e.preventDefault(); dz.classList.remove('drag'); upload(e.dataTransfer.files[0]); };
+$('#fileInput').onchange = e => upload(e.target.files[0]);
+
+async function upload(file) {
+  if (!file) return;
+  const st = $('#uploadStatus');
+  st.textContent = `Upload de ${file.name}…`;
+  const { path, signedUrl } = await api('/api/documents?action=upload_url', { method:'POST', body: JSON.stringify({ filename: file.name }) });
+  const up = await fetch(signedUrl, { method:'PUT', body: file });
+  if (!up.ok) { st.textContent = 'Échec upload storage'; return; }
+  st.textContent = 'Analyse IA en cours (classification, renommage, extraction des exigences)…';
+  const r = await api('/api/documents?action=process', { method:'POST', body: JSON.stringify({
+    client_id: $('#clientSel').value, storage_path: path, original_filename: file.name,
+    replaces_id: $('#replacesSel').value || null, effective_date_override: $('#effDate').value || null }) });
+  st.innerHTML = r.error ? `<span style="color:var(--warn)">${r.error}</span>` :
+    `✔ <b>${r.normalized}</b> — ${r.extracted} exigences extraites (nouvelles: ${r.staged?.new||0}, modifiées: ${r.staged?.modified||0}) → onglet Validation qualité.`;
+  loadLibrary();
+}
+async function loadLibrary() {
+  const p = new URLSearchParams({ action:'library', client_id: $('#clientSel').value });
+  if ($('#libType').value) p.set('doc_type', $('#libType').value);
+  if ($('#libStatus').value) p.set('status', $('#libStatus').value);
+  const docs = await api('/api/documents?'+p);
+  $('#libTable').innerHTML = !docs.length ? '<span class="muted">Aucun document.</span>' :
+    '<table><tr><th>Fichier</th><th>Type</th><th>V</th><th>Appl.</th><th>Statut</th><th>Déposé</th><th></th></tr>' +
+    docs.map(d => `<tr><td>${d.normalized_filename}</td><td>${d.doc_type}</td><td>v${d.version}</td><td>${d.effective_date||'—'}</td>
+      <td><span class="badge">${d.status}</span></td><td>${d.uploaded_at.slice(0,10)}</td>
+      <td><a href="#" onclick="dl('${d.id}');return false">⬇</a></td></tr>`).join('') + '</table>';
+  $('#replacesSel').innerHTML = '<option value="">Non — nouveau document</option>' +
+    docs.filter(d => d.status==='active').map(d => `<option value="${d.id}">${d.normalized_filename}</option>`).join('');
+}
+async function dl(id) { const { url } = await api(`/api/documents?action=download&id=${id}`); window.open(url); }
+async function loadClientTable() { renderTable(await api(`/api/query?action=table&client_id=${$('#clientSel').value}`), $('#clientTable')); }
+
+// --- Outil 1 : couple ---
+async function loadCouple() {
+  renderTable(await api(`/api/query?action=table&jurisdiction=${$('#cpPays').value}&client_id=${$('#cpClient').value}`), $('#coupleTable'));
+}
+
+// --- Outil 2 : comparateur ---
+let nT = 0;
+function addTarget() {
+  if (nT >= 3) return;
+  const i = nT++;
+  $('#cmpTargets').insertAdjacentHTML('beforeend',
+    `<div class="card" style="margin:0"><label>Cible ${i+1}</label>
+     <select id="t${i}p"><option value="">— pays —</option>${window._jopt}</select>
+     <select id="t${i}c"><option value="">— client —</option>${window._copt}</select></div>`);
+}
+async function runCompare() {
+  const targets = [];
+  for (let i = 0; i < nT; i++) {
+    const j = $(`#t${i}p`)?.value, c = $(`#t${i}c`)?.value;
+    if (!j && !c) continue;
+    const jl = j ? $(`#t${i}p`).selectedOptions[0].text : '';
+    const cl = c ? $(`#t${i}c`).selectedOptions[0].text.replace(/↳ /,'') : '';
+    targets.push({ label: [cl, jl].filter(Boolean).join(' @ '), jurisdiction: j || undefined, client_id: c || undefined });
+  }
+  if (targets.length < 2) { $('#cmpTable').textContent = 'Choisir au moins 2 cibles.'; return; }
+  const { targets: labels, rows } = await api('/api/query?action=compare', { method:'POST', body: JSON.stringify({ targets }) });
+  let html = `<table><tr><th>Paramètre</th>${labels.map(l => `<th>${l}</th>`).join('')}</tr>`;
+  let cur = null;
+  for (const r of rows) {
+    if (r.section !== cur) { cur = r.section; html += `<tr class="section-head"><td colspan="${labels.length+1}">${cur}</td></tr>`; }
+    const cells = labels.map((_, i) => r.cells[i]);
+    const vals = cells.map(c => c ? `${c.operator||''} ${c.limit_value ?? ''} ${c.unit||''}`.trim() || '✔' : null);
+    const differ = new Set(vals.filter(v => v !== null)).size > 1;
+    html += `<tr><td><b>${r.parameter}</b></td>` + cells.map((c, i) =>
+      `<td class="diffcell ${differ?'diff':''}">${c ? `${vals[i]}<br><span class="muted">${c.requirement.slice(0,120)}</span><br><span class="src">${c.source_url?`<a target="_blank" href="${c.source_url}">${c.source_ref||'source'} ↗</a>`:(c.source_ref||'')}</span>` : '<span class="muted">absent</span>'}</td>`).join('') + '</tr>';
+  }
+  $('#cmpTable').innerHTML = html + '</table>';
+}
+
+// --- Validation ---
+async function loadPending() {
+  const rows = await api('/api/query?action=pending');
+  $('#pendingTable').innerHTML = !rows.length ? '<span class="muted">Rien en attente.</span>' :
+    '<table><tr><th><input type="checkbox" onchange="document.querySelectorAll(\'.pk\').forEach(c=>c.checked=this.checked)"></th><th>Origine</th><th>Section</th><th>Paramètre</th><th>Exigence</th><th>Limite</th><th>Réf. source</th></tr>' +
+    rows.map(r => `<tr><td><input type="checkbox" class="pk" value="${r.id}"></td>
+      <td>${r.origin==='country'?r.jurisdiction:(r.clients?.name||'client')}</td><td>${r.sections?.label||r.section_id}</td>
+      <td><b>${r.parameter}</b></td><td>${r.requirement}</td>
+      <td>${r.limit_value!=null?`${r.operator||''} ${r.limit_value} ${r.unit||''}`:'—'}</td><td class="muted">${r.source_ref}</td></tr>`).join('') + '</table>';
+}
+async function decide(decision) {
+  const ids = [...document.querySelectorAll('.pk:checked')].map(c => c.value);
+  if (!ids.length) return alert('Sélectionner des lignes.');
+  await api('/api/validate', { method:'POST', body: JSON.stringify({ requirement_ids: ids, decision, validated_by: $('#validator').value || 'qualité' }) });
+  loadPending();
+}
+
+initSelectors();
+</script>
+</body>
+</html>
