@@ -40,6 +40,7 @@
   <nav>
     <button data-tab="pays" class="active">Veille pays</button>
     <button data-tab="client">Veille client</button>
+    <button data-tab="presse">Veille presse</button>
     <button data-tab="couple">Couple pays × client</button>
     <button data-tab="compare">Comparateur</button>
     <button data-tab="validation">Validation qualité</button>
@@ -64,6 +65,18 @@
 <!-- ============ ONGLET 2 : VEILLE CLIENT ============ -->
 <section id="tab-client" hidden>
   <div class="card">
+    <b>Clients</b>
+    <div class="muted" style="margin-bottom:8px">Sélection toujours sur liste : le seul endroit où un nom de client se saisit librement est ce formulaire d'ajout.</div>
+    <div class="row">
+      <div><label>Nouveau client</label><input type="text" id="newClientName" placeholder="Nom du client" style="min-width:200px"></div>
+      <div><label>Holding (facultatif)</label><select id="newClientParent"><option value="">— aucun —</option></select></div>
+      <div><label>Pays principal (facultatif)</label><input type="text" id="newClientCountry" style="min-width:120px"></div>
+      <button class="btn sec" onclick="createClient()">+ Ajouter à la liste</button>
+      <button class="btn sec" onclick="loadClientsAdmin()">Gérer (actifs/inactifs)</button>
+    </div>
+    <div id="clientsAdmin" style="margin-top:10px"></div>
+  </div>
+  <div class="card">
     <div class="row" style="margin-bottom:12px">
       <div><label>Client</label><select id="clientSel"></select></div>
       <div><label>Remplace un document existant ? (V2 → archive V1)</label><select id="replacesSel"><option value="">Non — nouveau document</option></select></div>
@@ -81,8 +94,28 @@
     </div>
     <div id="libTable"></div>
   </div>
-  <div class="card"><b>Spécifications du client</b><div id="clientTable" class="muted" style="margin-top:8px">Choisir un client puis filtrer.</div>
-    <button class="btn sec" style="margin-top:10px" onclick="loadClientTable()">Afficher la table de spécifications</button></div>
+  <div class="card"><b>Spécifications du client</b>
+    <div class="row" style="margin:8px 0">
+      <div><label>Type d'exigence</label><select id="clientReqType"><option value="">Tout (action + info)</option><option value="action">Action — à traiter</option><option value="info">Info — pour mémoire</option></select></div>
+      <button class="btn sec" onclick="loadClientTable()">Afficher la table de spécifications</button>
+    </div>
+    <div id="clientTable" class="muted">Choisir un client puis filtrer.</div>
+  </div>
+</section>
+
+<!-- ============ ONGLET VEILLE PRESSE ============ -->
+<section id="tab-presse" hidden>
+  <div class="card row">
+    <div class="muted" style="flex:1">Signal faible (presse, blogs juridiques) trié par IA. Ne crée JAMAIS d'exigence directement : une alerte pertinente invite à vérifier officiellement via l'onglet Veille pays.</div>
+    <button class="btn sec" onclick="runPress()">⟳ Lancer la veille presse maintenant</button>
+  </div>
+  <div class="card row">
+    <div><label>Pertinence</label><select id="pressRel"><option value="to_review">À trier</option><option value="relevant">Retenues</option><option value="not_relevant">Écartées</option><option value="">Toutes</option></select></div>
+    <div><label>Juridiction</label><select id="pressJur"><option value="">Toutes</option><option value="EU">UE</option><option value="UK">UK</option><option value="US">USA</option></select></div>
+    <button class="btn sec" onclick="loadPress()">Filtrer</button>
+    <div><label>Votre nom (pour la revue)</label><input type="text" id="pressReviewer"></div>
+  </div>
+  <div class="card"><div id="pressTable" class="muted">Rien pour l'instant — lancer la veille presse.</div></div>
 </section>
 
 <!-- ============ OUTIL 1 : COUPLE ============ -->
@@ -130,17 +163,22 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('active', x===b));
   document.querySelectorAll('main section').forEach(s => s.hidden = s.id !== 'tab-'+b.dataset.tab);
   if (b.dataset.tab === 'validation') loadPending();
+  if (b.dataset.tab === 'presse') loadPress();
 });
 
 // --- Rendu commun : table de spécifications par section (format unique) ---
-function renderTable(rows, el) {
+function renderTable(rows, el, opts={}) {
+  if (opts.reqType) rows = rows.filter(r => r.requirement_type === opts.reqType);
   if (!rows?.length) { el.innerHTML = '<span class="muted">Aucune exigence active.</span>'; return; }
-  let html = '<table><tr><th>Paramètre</th><th>Exigence</th><th>Limite</th><th>S\'applique à</th><th>Date d\'appl.</th><th>Source</th><th></th></tr>';
+  let html = '<table><tr><th>Type</th><th>Paramètre</th><th>Exigence</th><th>Limite</th><th>S\'applique à</th><th>Date d\'appl.</th><th>Source</th><th></th></tr>';
   let cur = null;
   for (const r of rows) {
-    if (r.section !== cur) { cur = r.section; html += `<tr class="section-head"><td colspan="7">${cur}</td></tr>`; }
+    if (r.section !== cur) { cur = r.section; html += `<tr class="section-head"><td colspan="8">${cur}</td></tr>`; }
     const lim = r.limit_value != null ? `${r.operator||''} ${r.limit_value} ${r.unit||''}` : (r.operator||'—');
-    html += `<tr><td><b>${r.parameter}</b></td><td>${r.requirement}</td><td>${lim}</td><td>${r.applies_to||'—'}</td>
+    const typeBadge = r.requirement_type === 'info'
+      ? '<span class="badge" title="Pour mémoire, ne change rien à l\'activité">Info</span>'
+      : '<span class="badge ai" style="background:#fdecea;color:var(--accent)" title="Il faut faire/vérifier quelque chose">Action</span>';
+    html += `<tr><td>${typeBadge}</td><td><b>${r.parameter}</b></td><td>${r.requirement}</td><td>${lim}</td><td>${r.applies_to||'—'}</td>
       <td>${r.effective_date||'—'}</td>
       <td class="src">${r.source_url?`<a href="${r.source_url}" target="_blank">${r.source_name||'source'} ↗</a>`:(r.source_name||'—')}<br><span class="muted">${r.source_ref||''}</span></td>
       <td><span class="badge ${r.confidence==='validated'?'validated':'ai'}">${r.confidence==='validated'?'validé':'IA'}</span></td></tr>`;
@@ -155,8 +193,60 @@ async function initSelectors() {
   const copt = clients.map(c => `<option value="${c.id}">${c.parent_id?'&nbsp;&nbsp;↳ ':''}${c.name}</option>`).join('');
   ['#paysSel','#cpPays'].forEach(s => $(s).innerHTML = jopt);
   ['#clientSel','#cpClient'].forEach(s => $(s).innerHTML = copt);
+  $('#newClientParent').innerHTML = '<option value="">— aucun —</option>' + copt;
   window._jopt = jopt; window._copt = copt;
   addTarget(); addTarget();
+}
+
+// --- Gestion clients (seul endroit avec saisie libre d'un nom) ---
+async function createClient() {
+  const name = $('#newClientName').value.trim();
+  if (!name) return alert('Nom requis.');
+  const r = await api('/api/clients?action=create', { method:'POST', body: JSON.stringify({
+    name, parent_id: $('#newClientParent').value || null, country: $('#newClientCountry').value || null }) });
+  if (r.error) return alert(r.error);
+  $('#newClientName').value = ''; $('#newClientCountry').value = '';
+  await initSelectors();
+  loadClientsAdmin();
+}
+async function loadClientsAdmin() {
+  const clients = await api('/api/clients?action=list&all=1');
+  $('#clientsAdmin').innerHTML = '<table><tr><th>Nom</th><th>Holding</th><th>Pays</th><th>Statut</th><th></th></tr>' +
+    clients.map(c => `<tr><td>${c.name}</td><td class="muted">${clients.find(p=>p.id===c.parent_id)?.name||'—'}</td><td>${c.country||'—'}</td>
+      <td><span class="badge ${c.active?'validated':''}">${c.active?'actif':'inactif'}</span></td>
+      <td><button class="btn sec" onclick="toggleClient('${c.id}',${!c.active})">${c.active?'Désactiver':'Réactiver'}</button></td></tr>`).join('') + '</table>';
+}
+async function toggleClient(id, active) {
+  await api('/api/clients?action=set_active', { method:'POST', body: JSON.stringify({ id, active }) });
+  await initSelectors();
+  loadClientsAdmin();
+}
+
+// --- Veille presse ---
+async function runPress() {
+  $('#pressTable').innerHTML = 'Veille presse en cours…';
+  const r = await api('/api/press?action=run', { method:'POST' });
+  $('#pressTable').innerHTML = `<b>Terminé.</b> Sources: ${r.sources_checked}, articles vus: ${r.articles_seen}, alertes créées: ${r.alerts_created}. ` +
+    (r.errors?.length ? `<span style="color:var(--warn)">Erreurs: ${JSON.stringify(r.errors)}</span>` : '');
+  loadPress();
+}
+async function loadPress() {
+  const p = new URLSearchParams();
+  if ($('#pressRel').value) p.set('relevance', $('#pressRel').value);
+  if ($('#pressJur').value) p.set('jurisdiction', $('#pressJur').value);
+  const rows = await api('/api/press?action=list&'+p);
+  $('#pressTable').innerHTML = !rows.length ? '<span class="muted">Rien ici.</span>' :
+    '<table><tr><th>Titre</th><th>Jur.</th><th>Urgence</th><th>À vérifier</th><th>Statut</th><th></th></tr>' +
+    rows.map(r => `<tr><td><a href="${r.article_url}" target="_blank">${r.title} ↗</a><div class="muted">${(r.summary||'').slice(0,140)}</div></td>
+      <td>${r.jurisdiction||'—'}</td><td>${r.urgency||'—'}</td><td class="muted">${r.suggested_action||'—'}</td>
+      <td><span class="badge ${r.relevance==='relevant'?'validated':''}">${r.relevance}</span></td>
+      <td>${r.relevance==='to_review' ? `<button class="btn sec" onclick="reviewPress('${r.id}','relevant')">Pertinent</button>
+        <button class="btn sec" onclick="reviewPress('${r.id}','not_relevant')">Écarter</button>` : ''}</td></tr>`).join('') + '</table>';
+}
+async function reviewPress(id, relevance) {
+  await api('/api/press?action=review', { method:'POST', body: JSON.stringify({
+    id, relevance, reviewed_by: $('#pressReviewer').value || 'qualité' }) });
+  loadPress();
 }
 async function loadPays() { renderTable(await api(`/api/query?action=table&jurisdiction=${$('#paysSel').value}`), $('#paysTable')); }
 async function runWatch() {
@@ -184,7 +274,7 @@ async function upload(file) {
   if (!up.ok) { st.textContent = 'Échec upload storage'; return; }
   st.textContent = 'Analyse IA en cours (classification, renommage, extraction des exigences)…';
   const r = await api('/api/documents?action=process', { method:'POST', body: JSON.stringify({
-    client_id: $('#clientSel').value, storage_path: path, original_filename: file.name,
+    client_id: $('#clientSel').value, storage_path: path, original_filename: file.name, mime: file.type || null,
     replaces_id: $('#replacesSel').value || null, effective_date_override: $('#effDate').value || null }) });
   st.innerHTML = r.error ? `<span style="color:var(--warn)">${r.error}</span>` :
     `✔ <b>${r.normalized}</b> — ${r.extracted} exigences extraites (nouvelles: ${r.staged?.new||0}, modifiées: ${r.staged?.modified||0}) → onglet Validation qualité.`;
@@ -204,7 +294,10 @@ async function loadLibrary() {
     docs.filter(d => d.status==='active').map(d => `<option value="${d.id}">${d.normalized_filename}</option>`).join('');
 }
 async function dl(id) { const { url } = await api(`/api/documents?action=download&id=${id}`); window.open(url); }
-async function loadClientTable() { renderTable(await api(`/api/query?action=table&client_id=${$('#clientSel').value}`), $('#clientTable')); }
+async function loadClientTable() {
+  renderTable(await api(`/api/query?action=table&client_id=${$('#clientSel').value}`), $('#clientTable'),
+    { reqType: $('#clientReqType').value || null });
+}
 
 // --- Outil 1 : couple ---
 async function loadCouple() {
