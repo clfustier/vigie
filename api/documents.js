@@ -8,6 +8,16 @@ import { diffAndStage } from '../lib/diff.js';
 import mammoth from 'mammoth';
 import * as XLSX from 'xlsx';
 
+// Filet de sécurité si le nom de fichier n'a pas d'extension (rare, mais un
+// original_filename.split('.').pop() sur un nom sans point renvoyait avant
+// le nom entier comme "extension" -> chemin de stockage absurde).
+function ext_fallback(mimeType) {
+  const map = { 'application/pdf': 'pdf', 'text/csv': 'csv', 'text/plain': 'txt',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx' };
+  return map[mimeType] || 'bin';
+}
+
 async function fileToText(buf, mime, name) {
   const ext = name.split('.').pop().toLowerCase();
   if (ext === 'docx') return (await mammoth.extractRawText({ buffer: buf })).value;
@@ -34,14 +44,17 @@ export default async function handler(req, res) {
 
   // 2) Traitement après upload
   if (action === 'process') {
-    const { client_id, storage_path, original_filename, replaces_id, effective_date_override } = req.body;
+    const { client_id, storage_path, original_filename, replaces_id, effective_date_override, mime: mimeType } = req.body;
     const { data: client } = await db.from('clients').select('*').eq('id', client_id).single();
     if (!client) return res.status(400).json({ error: 'client inconnu' });
+    // Sélection client = uniquement depuis la liste (/api/clients) ; un client
+    // désactivé ne doit plus pouvoir recevoir de nouveau dépôt même via appel API direct.
+    if (client.active === false) return res.status(400).json({ error: 'client désactivé' });
 
     const { data: blob, error: dlErr } = await db.storage.from('client-docs').download(storage_path);
     if (dlErr) return res.status(500).json({ error: dlErr.message });
     const buf = Buffer.from(await blob.arrayBuffer());
-    const ext = original_filename.split('.').pop().toLowerCase();
+    const ext = (original_filename.includes('.') ? original_filename.split('.').pop() : ext_fallback(mimeType)).toLowerCase();
     const text = await fileToText(buf, null, original_filename);
 
     // Classification (type + date d'application + libellé court)
@@ -62,16 +75,17 @@ export default async function handler(req, res) {
     const { data: doc, error: insErr } = await db.from('client_documents').insert({
       client_id, original_filename, normalized_filename: normalized,
       doc_type: cls.doc_type, version, replaces_id: replaces_id || null,
-      status: 'processing', effective_date: effective, storage_path: finalPath, mime: ext
+      status: 'processing', effective_date: effective, storage_path: finalPath,
+      mime: mimeType || `application/${ext}`  // vrai type MIME envoyé par le navigateur si dispo
     }).select().single();
     if (insErr) return res.status(500).json({ error: insErr.message });
 
-    // Extraction des exigences
+    // Extraction des exigences (prompt "client" : plus strict sur les généralités creuses)
     try {
       const note = `Cahier des charges / document qualité du client "${client.name}" (${normalized})`;
       const rows = ext === 'pdf'
-        ? await extractFromPdf(buf.toString('base64'), note)
-        : await extractFromText(text || '(document vide)', note);
+        ? await extractFromPdf(buf.toString('base64'), note, 'client')
+        : await extractFromText(text || '(document vide)', note, 'client');
       const staged = await diffAndStage({
         rows, origin: 'client', clientId: client_id, documentId: doc.id,
         replacesDocId: replaces_id || null, runId: null
