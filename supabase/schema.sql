@@ -143,11 +143,17 @@ CREATE TABLE requirements (
   validated_at   TIMESTAMPTZ,
   confidence     TEXT NOT NULL DEFAULT 'ai_extracted'
                  CHECK (confidence IN ('ai_extracted','manual_unverified','validated')),
+  -- Classification métier (demandée en session) :
+  --   'action' = il faut faire/vérifier/changer quelque chose de concret
+  --   'info'   = rappel contextuel, ne change rien à l'activité
+  requirement_type TEXT NOT NULL DEFAULT 'action'
+                 CHECK (requirement_type IN ('action','info')),
   CHECK ( (origin='country' AND jurisdiction IS NOT NULL)
        OR (origin='client'  AND client_id  IS NOT NULL) )
 );
 
 CREATE INDEX idx_req_lookup ON requirements (origin, jurisdiction, client_id, section_id, status);
+CREATE INDEX idx_req_type ON requirements (requirement_type);
 
 -- Portée d'une exigence de holding sur ses filiales (coche explicite,
 -- jamais de propagation automatique)
@@ -158,6 +164,42 @@ CREATE TABLE requirement_scope (
 );
 
 -- Changements détectés à chaque run (file de validation humaine)
+-- ---------- VEILLE PRESSE (signal faible — jamais une source d'exigences) ----------
+-- Rôle différent de `sources` : la presse n'est pas normative. On détecte un
+-- signal (article), on le fait trier par IA (pertinent ? urgence ?), et un
+-- humain décide s'il déclenche une vérification officielle (veille pays
+-- classique, qui elle seule peut créer une ligne dans `requirements`).
+
+CREATE TABLE press_sources (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  jurisdiction  TEXT REFERENCES jurisdictions(code),  -- NULL = transverse (toutes zones)
+  name          TEXT NOT NULL,
+  fetcher       TEXT NOT NULL,              -- 'rss' | 'gdelt'
+  fetch_config  JSONB NOT NULL,             -- {"url":"..."} ou {"query":"...","timespan":"7d"}
+  url_human     TEXT NOT NULL,
+  active        BOOLEAN NOT NULL DEFAULT true,
+  UNIQUE (name)
+);
+
+CREATE TABLE press_alerts (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  press_source_id  UUID REFERENCES press_sources(id),
+  jurisdiction     TEXT REFERENCES jurisdictions(code),
+  title            TEXT NOT NULL,
+  summary          TEXT,
+  article_url      TEXT NOT NULL UNIQUE,
+  published_at     TIMESTAMPTZ,
+  relevance        TEXT NOT NULL DEFAULT 'to_review'
+                   CHECK (relevance IN ('to_review','relevant','not_relevant')),
+  urgency          TEXT CHECK (urgency IN ('high','medium','low')),
+  suggested_action TEXT,                    -- ex: "vérifier si le règl. 2019/934 est modifié"
+  linked_source_id UUID REFERENCES sources(id),  -- rapproché d'une source officielle existante
+  reviewed_by      TEXT,
+  reviewed_at      TIMESTAMPTZ,
+  fetched_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_press_relevance ON press_alerts (relevance, jurisdiction);
+
 CREATE TABLE change_log (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   run_id         UUID REFERENCES watch_runs(id),
