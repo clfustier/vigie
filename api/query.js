@@ -61,7 +61,11 @@ export default async function handler(req, res) {
     }
 
     if (action === 'clients') {
-      const { data } = await db.from('clients').select('*').order('name');
+      // Bug corrigé : cette liste alimente TOUS les sélecteurs client de
+      // l'app (dépôt de doc, couple, comparateur) -> elle ne doit montrer
+      // que les clients actifs, jamais un client désactivé. La gestion
+      // complète (y compris inactifs) est sur /api/clients?action=list&all=1.
+      const { data } = await db.from('clients').select('*').eq('active', true).order('name');
       return res.json(data);
     }
     if (action === 'jurisdictions') {
